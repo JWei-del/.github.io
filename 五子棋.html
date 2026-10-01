@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>五子棋 - 多难度AI</title>
+    <style>
+        body {
+            text-align: center;
+            font-family: "Microsoft Yahei", sans-serif;
+            background-color: #f4f4f4;
+        }
+        #board {
+            border: 2px solid #333;
+            background-color: #DEB887;
+            margin: 10px auto;
+        }
+        .info {
+            font-size: 20px;
+            margin-bottom:10px;
+        }
+        button {
+            font-size:16px;
+            padding:6px 12px;
+            cursor:pointer;
+            margin:0 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="info" id="msg">请选择难度并开始游戏</div>
+    <div>
+        <button onclick="setLevel('easy')">普通</button>
+        <button onclick="setLevel('hard')">困难</button>
+        <button onclick="setLevel('extreme')">特困难</button>
+        <button onclick="setMode('pvp')">双人对战</button>
+        <button onclick="resetGame()">重新开始</button>
+    </div>
+    <canvas id="board" width="600" height="600"></canvas>
+
+    <script>
+        const size = 15;
+        const cell = 40;
+        const board = [];
+        let currentPlayer = 1; //1黑玩家，2白AI
+        let gameOver = false;
+        let gameMode = "pve";
+        let level = "hard"; // easy普通 hard困难 extreme特困难
+        let lastPos = {r:-1,c:-1};
+        const canvas = document.getElementById('board');
+        const ctx = canvas.getContext('2d');
+        const msgDom = document.getElementById('msg');
+        const dirs = [ [0,1], [1,0], [1,1], [1,-1] ];
+
+        function initBoard() {
+            for(let i=0; i<size; i++){
+                board[i] = [];
+                for(let j=0; j<size; j++){
+                    board[i][j] = 0;
+                }
+            }
+            lastPos = {r:-1,c:-1};
+        }
+
+        function drawBoard() {
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+            ctx.strokeStyle = "#333";
+            ctx.lineWidth = 1;
+            //绘制棋盘线
+            for(let i=0;i<size;i++){
+                ctx.beginPath();
+                ctx.moveTo(cell/2 + i*cell, cell/2);
+                ctx.lineTo(cell/2 + i*cell, cell/2 + (size-1)*cell);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(cell/2, cell/2 + i*cell);
+                ctx.lineTo(cell/2 + (size-1)*cell, cell/2 + i*cell);
+                ctx.stroke();
+            }
+            //绘制棋子
+            for(let r=0;r<size;r++){
+                for(let c=0;c<size;c++){
+                    const val = board[r][c];
+                    if(val === 0) continue;
+                    ctx.beginPath();
+                    ctx.arc(cell/2 + c*cell, cell/2 + r*cell, cell*0.4, 0, Math.PI*2);
+                    if(val ===1){
+                        ctx.fillStyle="#000";
+                    }else{
+                        ctx.fillStyle="#fff";
+                        ctx.strokeStyle="#333";
+                        ctx.lineWidth=1;
+                        ctx.stroke();
+                    }
+                    ctx.fill();
+                    //最后落子红圈标记
+                    if(r === lastPos.r && c === lastPos.c){
+                        ctx.beginPath();
+                        ctx.arc(cell/2 + c*cell, cell/2 + r*cell, cell*0.2, 0, Math.PI*2);
+                        ctx.strokeStyle="red";
+                        ctx.lineWidth=2;
+                        ctx.stroke();
+                    }
+                }
+            }
+        }
+
+        // 判断是否五连
+        function checkWin(r,c,player){
+            for(let [dr,dc] of dirs){
+                let count = 1;
+                let nr = r + dr;
+                let nc = c + dc;
+                while(nr>=0 && nr<size && nc>=0 && nc<size && board[nr][nc] === player){
+                    count++;
+                    nr += dr;
+                    nc += dc;
+                }
+                nr = r - dr;
+                nc = c - dc;
+                while(nr>=0 && nr<size && nc>=0 && nc<size && board[nr][nc] === player){
+                    count++;
+                    nr -= dr;
+                    nc -= dc;
+                }
+                if(count >=5) return true;
+            }
+            return false;
+        }
+
+        function isBoardFull(){
+            for(let r=0;r<size;r++){
+                for(let c=0;c<size;c++){
+                    if(board[r][c] === 0) return false;
+                }
+            }
+            return true;
+        }
+
+        // 获取候选点：只取已有棋子周围2格内的空位
+        function getCandidatePoints(){
+            const candidates = new Set();
+            for(let r=0;r<size;r++){
+                for(let c=0;c<size;c++){
+                    if(board[r][c] !==0){
+                        for(let dr=-2;dr<=2;dr++){
+                            for(let dc=-2;dc<=2;dc++){
+                                const nr = r+dr;
+                                const nc = c+dc;
+                                if(nr>=0&&nr<size&&nc>=0&&nc<size && board[nr][nc]===0){
+                                    candidates.add(nr+","+nc);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if(candidates.size ===0){
+                return [{r:7,c:7}];
+            }
+            return Array.from(candidates).map(s=>{
+                const [r,c] = s.split(',').map(Number);
+                return {r,c};
+            });
+        }
+
+        // 单点棋型评估
+        function evaluatePoint(r,c,player){
+            if(board[r][c] !== 0) return -Infinity;
+            const enemy = player === 1 ? 2 : 1;
+            let totalScore = 0;
+
+            board[r][c] = player;
+            for(let [dr,dc] of dirs){
+                let line = [];
+                for(let k=-4;k<=4;k++){
+                    const nr = r + dr*k;
+                    const nc = c + dc*k;
+                    if(nr<0||nr>=size||nc<0||nc>=size) line.push(-1);
+                    else line.push(board[nr][nc]);
+                }
+                let pCount = 0, blankL = false, blankR = false;
+                let mid = 4;
+                for(let i=mid-1;i>=0;i--){
+                    if(line[i] === player) pCount++;
+                    else if(line[i] === 0) { blankL=true; break; }
+                    else break;
+                }
+                for(let i=mid+1;i<line.length;i++){
+                    if(line[i] === player) pCount++;
+                    else if(line[i] === 0) { blankR=true; break; }
+                    else break;
+                }
+                if(pCount ===4 && blankL && blankR) totalScore += 1000000;
+                else if(pCount ===4 && (blankL || blankR)) totalScore += 100000;
+                else if(pCount ===3 && blankL && blankR) totalScore += 50000;
+                else if(pCount ===3 && (blankL || blankR)) totalScore += 8000;
+                else if(pCount ===2 && blankL && blankR) totalScore += 2000;
+                else if(pCount ===2 && (blankL || blankR)) totalScore += 300;
+                else if(pCount ===1) totalScore += 10;
+            }
+            board[r][c] = 0;
+            return totalScore;
+        }
+
+        // ===== AI难度实现 =====
+        // 普通AI：基础贪心，防守权重低
+        function aiEasy(){
+            const candidates = getCandidatePoints();
+            let bestScore = -Infinity;
+            let best = candidates[0];
+            for(let p of candidates){
+                const attackScore = evaluatePoint(p.r, p.c, 2);
+                const defendScore = evaluatePoint(p.r, p.c, 1);
+                const score = attackScore + defendScore * 0.6;
+                if(score > bestScore){
+                    bestScore = score;
+                    best = p;
+                }
+            }
+            return best;
+        }
+
+        // 困难AI：之前大师AI，防守权重1.15
+        function aiHard(){
+            const candidates = getCandidatePoints();
+            let bestScore = -Infinity;
+            let best = candidates[0];
+            for(let p of candidates){
+                const attackScore = evaluatePoint(p.r, p.c, 2);
+                const defendScore = evaluatePoint(p.r, p.c, 1);
+                const score = attackScore + defendScore * 1.15;
+                if(score > bestScore){
+                    bestScore = score;
+                    best = p;
+                }
+            }
+            return best;
+        }
+
+        // 特困难：极小极大 αβ剪枝，深度2层预判
+        function aiExtreme(){
+            const candidates = getCandidatePoints();
+            let bestVal = -Infinity;
+            let bestMove = candidates[0];
+            const depth = 2;
+            function minmax(r,c, d, alpha, beta, isMax){
+                if(d === 0) {
+                    const s = evaluatePoint(r,c,isMax?2:1);
+                    return s;
+                }
+                const moves = getCandidatePoints();
+                if(isMax){
+                    let maxV = -Infinity;
+                    for(let m of moves){
+                        if(board[m.r][m.c]!==0) continue;
+                        board[m.r][m.c] = 2;
+                        let v = minmax(m.r,m.c,d-1,alpha,beta,false);
+                        board[m.r][m.c] = 0;
+                        maxV = Math.max(maxV, v);
+                        alpha = Math.max(alpha, maxV);
+                        if(beta <= alpha) break;
+                    }
+                    return maxV;
+                }else{
+                    let minV = Infinity;
+                    for(let m of moves){
+                        if(board[m.r][m.c]!==0) continue;
+                        board[m.r][m.c] = 1;
+                        let v = minmax(m.r,m.c,d-1,alpha,beta,true);
+                        board[m.r][m.c] = 0;
+                        minV = Math.min(minV, v);
+                        beta = Math.min(beta, minV);
+                        if(beta <= alpha) break;
+                    }
+                    return minV;
+                }
+            }
+            for(let p of candidates){
+                board[p.r][p.c] = 2;
+                const score = minmax(p.r,p.c,depth,-Infinity,Infinity,false);
+                board[p.r][p.c] = 0;
+                if(score > bestVal){
+                    bestVal = score;
+                    bestMove = p;
+                }
+            }
+            return bestMove;
+        }
+
+        function aiMove(){
+            if(level === "easy") return aiEasy();
+            if(level === "hard") return aiHard();
+            if(level === "extreme") return aiExtreme();
+        }
+
+        //落子后统一处理逻辑
+        function afterDrop(r,c,player){
+            board[r][c] = player;
+            lastPos = {r,c};
+            drawBoard();
+            if(checkWin(r,c,player)){
+                gameOver = true;
+                if(player===1){
+                    msgDom.innerText = "🎉恭喜！黑棋获胜！";
+                }else{
+                    msgDom.innerText = "😎AI白棋获胜！";
+                }
+                return true;
+            }
+            if(isBoardFull()){
+                gameOver = true;
+                msgDom.innerText = "棋盘填满，平局！";
+                return true;
+            }
+            return false;
+        }
+
+        canvas.onclick = async function(e){
+            if(gameOver) return;
+            if(gameMode === "pve" && currentPlayer === 2) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const col = Math.round((x - cell/2)/cell);
+            const row = Math.round((y - cell/2)/cell);
+            if(row<0 || row>=size || col<0 || col>=size) return;
+            if(board[row][col] !==0){
+                msgDom.innerText = "该位置已有棋子，请重新点击！";
+                return;
+            }
+
+            const win = afterDrop(row, col, currentPlayer);
+            if(win) return;
+            currentPlayer = currentPlayer ===1 ? 2 :1;
+
+            if(gameMode === "pve" && currentPlayer ===2){
+                msgDom.innerText = "AI思考中...";
+                await sleep(400);
+                const aiPos = aiMove();
+                const aiWin = afterDrop(aiPos.r, aiPos.c, 2);
+                if(aiWin) return;
+                currentPlayer = 1;
+                msgDom.innerText = "轮到黑棋落子";
+            }else{
+                msgDom.innerText = currentPlayer===1 ? "轮到黑棋落子" : "轮到白棋落子";
+            }
+        }
+
+        function sleep(ms){
+            return new Promise(resolve=>setTimeout(resolve,ms));
+        }
+
+        function setMode(mode){
+            gameMode = mode;
+            resetGame();
+            if(mode === "pvp"){
+                msgDom.innerText = "双人对战模式，黑棋先行";
+            }else{
+                let levelText = {easy:"普通",hard:"困难",extreme:"特困难"}[level];
+                msgDom.innerText = `人机对战【${levelText}】｜你是黑棋`;
+            }
+        }
+
+        function setLevel(lv){
+            level = lv;
+            gameMode = "pve";
+            resetGame();
+            let levelText = {easy:"普通",hard:"困难",extreme:"特困难"}[level];
+            msgDom.innerText = `已选择【${levelText}】人机｜你是黑棋`;
+        }
+
+        function resetGame(){
+            gameOver = false;
+            currentPlayer =1;
+            initBoard();
+            drawBoard();
+            if(gameMode === "pvp"){
+                msgDom.innerText = "双人对战模式，黑棋先行";
+            }else{
+                let levelText = {easy:"普通",hard:"困难",extreme:"特困难"}[level];
+                msgDom.innerText = `人机对战【${levelText}】｜你是黑棋`;
+            }
+        }
+
+        initBoard();
+        drawBoard();
+    </script>
+</body>
+</html>
